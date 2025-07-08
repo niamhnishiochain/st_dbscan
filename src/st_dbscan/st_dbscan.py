@@ -1,14 +1,10 @@
-# -*- coding: utf-8 -*-
 """
+ADAPTED VERSION OF THE ST-DBSCAN ALGORITHM TO ACCEPT EPS3
+
 ST-DBSCAN - fast scalable implementation of ST DBSCAN
             scales also to memory by splitting into frames
             and merging the clusters together
 """
-
-# Author: Eren Cakmak <eren.cakmak@uni-konstanz.de>
-#         Manuel Plank <manuel.plank@uni-konstanz.de>
-#
-# License: MIT
 
 import numpy as np
 from scipy.spatial.distance import pdist, squareform
@@ -59,11 +55,13 @@ class ST_DBSCAN():
     def __init__(self,
                  eps1=0.5,
                  eps2=10,
+                 eps3=0.1, 
                  min_samples=5,
                  metric='euclidean',
                  n_jobs=-1):
         self.eps1 = eps1
         self.eps2 = eps2
+        self.eps3 = eps3
         self.min_samples = min_samples
         self.metric = metric
         self.n_jobs = n_jobs
@@ -85,6 +83,9 @@ class ST_DBSCAN():
         """
         # check if input is correct
         X = check_array(X)
+        time = X[:, 0].reshape(-1, 1)
+        space = X[:, 1:3] # Assumes x, y
+        covars = X[:, 3:] # Remaining columns as covariates
 
         if not self.eps1 > 0.0 or not self.eps2 > 0.0 or not self.min_samples > 0.0:
             raise ValueError('eps1, eps2, minPts must be positive')
@@ -95,16 +96,22 @@ class ST_DBSCAN():
             # compute with quadratic memory consumption
 
             # Compute sqaured form Euclidean Distance Matrix for 'time' attribute and the spatial attributes
-            time_dist = pdist(X[:, 0].reshape(n, 1), metric=self.metric)
-            euc_dist = pdist(X[:, 1:], metric=self.metric)
+            time_dist = pdist(time, metric=self.metric)
+            space_dist = pdist(space, metric=self.metric)
+            covar_dist = pdist(covars, metric=self.metric)
 
-            # filter the euc_dist matrix using the time_dist
-            dist = np.where(time_dist <= self.eps2, euc_dist, 2 * self.eps1)
+            # Only keep distances where all criteria are met
+            valid = (time_dist <= self.eps2) & \
+                    (space_dist <= self.eps1) & \
+                    (covar_dist <= self.eps3)
+            
+            # All other distance set to a large value to stop them clustering
+            combined_dist = np.where(valid, space_dist, 2 * self.eps1)
 
             db = DBSCAN(eps=self.eps1,
                         min_samples=self.min_samples,
                         metric='precomputed')
-            db.fit(squareform(dist))
+            db.fit(squareform(combined_dist))
 
             self.labels = db.labels_
 
@@ -113,19 +120,29 @@ class ST_DBSCAN():
                 warnings.simplefilter("ignore")
 
                 # compute with sparse matrices
-                # Compute sparse matrix für Euclidean distance
+                # Compute sparse matrix for spatial distance
                 nn_spatial = NearestNeighbors(metric=self.metric,
                                               radius=self.eps1)
-                nn_spatial.fit(X[:, 1:])
-                euc_sp = nn_spatial.radius_neighbors_graph(X[:, 1:],
+                nn_spatial.fit(space)
+                euc_sp = nn_spatial.radius_neighbors_graph(space,
                                                            mode='distance')
 
-                # Compute sparse matrix für temporal distance
+                # Compute sparse matrix for temporal distance
                 nn_time = NearestNeighbors(metric=self.metric,
                                            radius=self.eps2)
-                nn_time.fit(X[:, 0].reshape(n, 1))
-                time_sp = nn_time.radius_neighbors_graph(X[:, 0].reshape(n, 1),
+                nn_time.fit(time)
+                time_sp = nn_time.radius_neighbors_graph(time,
                                                          mode='distance')
+                
+                # Compute sparse matrix for covariate distance
+                nn_covars = NearestNeighbors(metric=self.metric,
+                                             radius=self.eps3)
+                nn_covars.fit(covars)
+                covar_sp = nn_covars.radius_neighbors_graph(covars,                
+                                                            mode='distance')
+                
+                # Combine the sparse matrices where all three conditions are met
+                non_zero_all_three = time_sp.multiply(euc_sp).multiply(covar_sp)
 
                 # combine both sparse matrixes and filter by time distance matrix
                 row = time_sp.nonzero()[0]
