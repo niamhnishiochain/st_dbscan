@@ -25,6 +25,9 @@ class ST_DBSCAN():
     eps2 : float, default=10
         The temporal threshold (maximum temporal distance) between two 
         points to be considered related.
+    eps3: float, default=0.1
+        The covariate threshold (maximum distance in covariates) between two
+        points to be considered related.
     min_samples : int, default=5
         The number of samples required for a core point.
     metric : string default='euclidean'
@@ -92,74 +95,29 @@ class ST_DBSCAN():
         if not self.eps1 > 0.0 or not self.eps2 > 0.0 or not self.min_samples > 0.0:
             raise ValueError('eps1, eps2, minPts must be positive')
 
-        if len(X) < 20000:
-            # Compute sqaured form Euclidean Distance Matrix for 'time' attribute and the spatial attributes
-            time_dist = pdist(time, metric=self.metric)
-            space_dist = pdist(space, metric=self.metric)
+        # Compute sqaured form Euclidean Distance Matrix for 'time' attribute and the spatial attributes
+        time_dist = pdist(time, metric=self.metric)
+        space_dist = pdist(space, metric=self.metric)
 
-            if covars is not None and covars.shape[1] > 0:
-                covar_dist = pdist(covars, metric=self.metric)
-            else:
-                covar_dist = np.zeros_like(time_dist)
-
-            # Only keep distances where all criteria are met
-            valid = (time_dist <= self.eps2) & \
-                    (space_dist <= self.eps1) & \
-                    (covar_dist <= self.eps3)
-            
-            # All other distance set to a large value to stop them clustering
-            combined_dist = np.where(valid, space_dist, 2 * self.eps1)
-
-            db = DBSCAN(eps=self.eps1,
-                        min_samples=self.min_samples,
-                        metric='precomputed')
-            db.fit(squareform(combined_dist))
-
-            self.labels = db.labels_
-
+        if covars is not None and covars.shape[1] > 0:
+            covar_dist = pdist(covars, metric=self.metric)
         else:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
+            covar_dist = np.zeros_like(time_dist)
 
-                # compute with sparse matrices
-                # Compute sparse matrix for spatial distance
-                nn_spatial = NearestNeighbors(metric=self.metric,
-                                              radius=self.eps1)
-                nn_spatial.fit(space)
-                space_sp = nn_spatial.radius_neighbors_graph(space,
-                                                           mode='distance')
+        # Only keep distances where all criteria are met
+        valid = (time_dist <= self.eps2) & \
+                (space_dist <= self.eps1) & \
+                (covar_dist <= self.eps3)
+        
+        # All other distance set to a large value to stop them clustering
+        combined_dist = np.where(valid, space_dist, 2 * self.eps1)
 
-                # Compute sparse matrix for temporal distance
-                nn_time = NearestNeighbors(metric=self.metric,
-                                           radius=self.eps2)
-                nn_time.fit(time)
-                time_sp = nn_time.radius_neighbors_graph(time,
-                                                         mode='distance')
-                
-                # Compute sparse matrix for covariate distance
-                if covars is not None and covars.shape[1] > 0:
-                    nn_covars = NearestNeighbors(metric=self.metric,
-                                             radius=self.eps3)
-                    nn_covars.fit(covars)
-                    covar_sp = nn_covars.radius_neighbors_graph(covars,                
-                                                            mode='distance')
-                else:
-                    covar_sp = time_sp.copy()
-                    # idea being no constraint here but not sure
-                    covar_sp.data.fill(0.0)
-                
-                # Combine the sparse matrices where all three conditions are met
-                combined_graph = time_sp.multiply(space_sp).multiply(covar_sp)
+        db = DBSCAN(eps=self.eps1,
+                    min_samples=self.min_samples,
+                    metric='precomputed')
+        db.fit(squareform(combined_dist))
 
-                db = DBSCAN(eps=self.eps1,
-                            min_samples=self.min_samples,
-                            metric='precomputed') # THIS IS WRONG I THINK! 
-                # If 'precomputed' it expects actual distances, but now we have the product of the
-                # distances
-                # XNTS: FIGURE THIS OUT PLEASE  
-                db.fit(combined_graph)
-
-                self.labels = db.labels_
+        self.labels = db.labels_
 
         return self
 
